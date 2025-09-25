@@ -102,6 +102,18 @@ jobs:
         set -v
         REPO_BRANCH="24.10-SNAPSHOT"
         echo "$REPO_BRANCH"
+        # 下载并重试
+        function curl_retry() {
+          local url="$1"
+          local out="$2"
+          local n=0
+          until [ $n -ge 5 ]
+          do
+            curl -fL -o "$out" "$url" && break
+            n=$((n+1))
+            sleep 10
+          done
+        }
         if [ ${{matrix.target}} == "mipsel_24kc" ]; then
             curl -fL -o sdk.tar.zst https://downloads.openwrt.org/releases/$REPO_BRANCH/targets/ramips/mt7621/openwrt-sdk-$REPO_BRANCH-ramips-mt7621_gcc-13.3.0_musl.Linux-x86_64.tar.zst || curl -fL -o sdk.tar.zst https://downloads.cdn.openwrt.org/releases/$REPO_BRANCH/targets/ramips/mt7621/openwrt-sdk-$REPO_BRANCH-ramips-mt7621_gcc-13.3.0_musl.Linux-x86_64.tar.zst 
         elif [ ${{matrix.target}} == "mips_24kc" ]; then
@@ -155,14 +167,19 @@ jobs:
           [[ "$mv" != "mv" ]] && shift 2 || shift 3
           rootdir="$PWD"
           tmpdir="$(mktemp -d)" || exit 1
-          if [ ${#branch} -lt 10 ]; then
-          git clone -b "$branch" --depth 1 --filter=blob:none --sparse "$rurl" "$tmpdir"
+          # git clone 加重试
+          n=0
+          until [ $n -ge 5 ]
+          do
+            if [ ${#branch} -lt 10 ]; then
+              git clone -b "$branch" --depth 1 --filter=blob:none --sparse "$rurl" "$tmpdir" && break
+            else
+              git clone --filter=blob:none --sparse "$rurl" "$tmpdir" && (cd "$tmpdir" && git checkout $branch) && break
+            fi
+            n=$((n+1))
+            sleep 10
+          done
           cd "$tmpdir"
-          else
-          git clone --filter=blob:none --sparse "$rurl" "$tmpdir"
-          cd "$tmpdir"
-          git checkout $branch
-          fi
           if [ "$?" != 0 ]; then
             echo "error on $rurl"
             exit 1
@@ -171,9 +188,11 @@ jobs:
           git sparse-checkout set $@
           [[ "$mv" != "mv" ]] && cp -rn ./* $rootdir/ || mv -n $@/* $rootdir/$@/
           cd $rootdir
-          }
+        }
         export -f git_clone_path
-        tar -xJf sdk.tar.zst -C openwrt || tar -xf sdk.tar.zst -C openwrt
+        # 检查文件类型并解压
+        file sdk.tar.zst
+        tar --use-compress-program=unzstd -xf sdk.tar.zst -C openwrt || tar -I zstd -xf sdk.tar.zst -C openwrt
         rm -Rf sdk.tar.zst
         cd openwrt
         cp -rf ./openwrt-sdk*/. ./ 2>/dev/null || true
@@ -342,3 +361,4 @@ jobs:
       with:
         name: ${{ env.date3 }} ${{matrix.target}}
         path: packages
+
