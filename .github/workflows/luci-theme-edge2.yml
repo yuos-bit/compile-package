@@ -84,7 +84,7 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@main
         with:
-          name: ${{ PLUGIN_NAME }}-${{ matrix.target }}
+          name: ${{ env.PLUGIN_NAME }}-${{ matrix.target }}
           path: output/${{ matrix.target }}/*.ipk
 
       - name: Create release (on tag)
