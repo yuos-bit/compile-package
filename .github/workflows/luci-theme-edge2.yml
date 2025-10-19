@@ -1,0 +1,96 @@
+name: luci-theme-edge2 Compile
+
+on:
+  push:
+    paths:
+      - '.github/workflows/luci-theme-edge2.yml'
+  pull_request:
+  workflow_dispatch:
+
+env:
+  REPO_BRANCH: "21.02-SNAPSHOT"
+  TZ: Asia/Shanghai
+  PLUGIN_NAME: "luci-theme-edge2"
+  PLUGIN_REPO: "https://github.com/yuos-bit/luci-theme-edge2"
+
+jobs:
+  compile:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [
+          "x86_64",
+          "aarch64_generic",
+          "mipsel_24kc",
+          "arm_cortex-a7_neon-vfpv4"
+        ]
+
+    steps:
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -qq -y build-essential clang flex bison g++ gawk gcc-multilib gettext \
+            git libncurses5-dev libssl-dev python3-distutils rsync unzip zlib1g-dev libelf-dev \
+            libfuse-dev qemu-utils upx jq aria2 xz-utils
+
+      - name: Get SDK
+        run: |
+          mkdir -p openwrt
+          case ${{ matrix.target }} in
+            x86_64)
+              SDK_URL="https://downloads.openwrt.org/releases/$REPO_BRANCH/targets/x86/64/openwrt-sdk-$REPO_BRANCH-x86-64_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
+              ;;
+            aarch64_generic)
+              SDK_URL="https://downloads.openwrt.org/releases/$REPO_BRANCH/targets/rockchip/armv8/openwrt-sdk-$REPO_BRANCH-rockchip-armv8_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
+              ;;
+            mipsel_24kc)
+              SDK_URL="https://downloads.openwrt.org/releases/$REPO_BRANCH/targets/ramips/mt7621/openwrt-sdk-$REPO_BRANCH-ramips-mt7621_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
+              ;;
+            arm_cortex-a7_neon-vfpv4)
+              SDK_URL="https://downloads.openwrt.org/releases/$REPO_BRANCH/targets/ipq40xx/generic/openwrt-sdk-$REPO_BRANCH-ipq40xx-generic_gcc-8.4.0_musl_eabi.Linux-x86_64.tar.xz"
+              ;;
+          esac
+          echo "Downloading SDK from: $SDK_URL"
+          curl -fL -o sdk.tar.xz "$SDK_URL" || curl -fL -o sdk.tar.xz "https://downloads.cdn.openwrt.org/releases/$REPO_BRANCH/targets/$(echo $SDK_URL | awk -F'targets/' '{print $2}')"
+          tar -xf sdk.tar.xz -C openwrt
+          mv openwrt/openwrt-sdk-*/* openwrt/
+          rm -rf sdk.tar.xz
+
+      - name: Prepare build environment
+        run: |
+          cd openwrt
+          # 配置 feeds
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          
+          # 克隆插件源码
+          git clone --depth 1 $PLUGIN_REPO package/$PLUGIN_NAME
+          
+          # 启用插件编译
+          echo "CONFIG_PACKAGE_$PLUGIN_NAME=y" >> .config
+          make defconfig
+
+      - name: Compile plugin
+        run: |
+          cd openwrt
+          make package/$PLUGIN_NAME/compile -j$(nproc) V=s
+
+      - name: Organize artifacts
+        run: |
+          mkdir -p output/${{ matrix.target }}
+          find openwrt/bin/packages -name "${PLUGIN_NAME}*.ipk" -exec cp {} output/${{ matrix.target }}/ \;
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@main
+        with:
+          name: ${{ PLUGIN_NAME }}-${{ matrix.target }}
+          path: output/${{ matrix.target }}/*.ipk
+
+      - name: Create release (on tag)
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: output/**/*.ipk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
